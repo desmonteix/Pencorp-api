@@ -36,9 +36,29 @@ def load_data():
                 'Total_monto': 'ticket_value'
             })
 
-            # CORRECCIÓN DE ERROR: Asegurar que 'order_item' sea siempre string
-            # (Supabase puede devolver dicts si la columna es JSON)
-            data['order_item'] = data['order_item'].astype(str)
+            # --- NUEVA LOGICA: PROCESAMIENTO DE JSON Y EXPLODE ---
+            # 1. Asegurar que sea una lista (parsear si es string)
+            def parse_items(x):
+                if isinstance(x, list): return x
+                try:
+                    import json
+                    # Reemplazar comillas simples por dobles por si acaso viene como string de python
+                    return json.loads(str(x).replace("'", '"')) 
+                except:
+                    return [str(x)] # Si falla, devolver como lista de 1 elemento
+
+            data['order_item'] = data['order_item'].apply(parse_items)
+            
+            # 2. Explode: Separar cada ítem de la lista en una fila distinta
+            data = data.explode('order_item')
+            
+            # 3. Limpieza: Eliminar filas que sean "Total", "Pago", "Envio", etc.
+            data['order_item'] = data['order_item'].astype(str).str.strip()
+            blacklist = ['Total:', 'Pago:', 'Vuelto:', 'Envio', 'Recargo', 'Son:', 'Dirección', 'Nombre:']
+            # Filtramos: Que NO empiece con palabras de la blacklist
+            pattern = '|'.join(blacklist)
+            data = data[~data['order_item'].str.contains(pattern, case=False, na=False)]
+            # -----------------------------------------------------
             
             # Asegurarse de tener hora y día (extraer de created_at si existe, sino simular)
             if 'created_at' in data.columns:
