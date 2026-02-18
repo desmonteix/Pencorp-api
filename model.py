@@ -1,4 +1,8 @@
 import os
+import pandas as pd
+from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing import LabelEncoder
+
 try:
     from supabase import create_client
 except ImportError:
