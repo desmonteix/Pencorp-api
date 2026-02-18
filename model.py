@@ -57,6 +57,7 @@ def load_data():
             print(f"Error conectando a Supabase: {e}. Usando Mock Data.")
     
     print("Usando Datos Mock (Local)...")
+    # FORZAR NUEVO DESPLIEGUE (FORCE DEPLOY)
     # Datos de entrenamiento Mock (Historial enriquecido)
     # 0 = Lunes, 6 = Domingo
     # Datos de entrenamiento Mock (Historial enriquecido)
