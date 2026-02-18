@@ -50,6 +50,12 @@ def load_data():
                 data['hour_of_day'] = 12
                 data['day_of_week'] = 0
 
+            # CORRECCIÓN DE ERROR 2: Asegurar que no haya NaNs en features numéricos
+            # (Si ticket_value es NULL, lo ponemos en 0)
+            data['ticket_value'] = pd.to_numeric(data['ticket_value'], errors='coerce').fillna(0)
+            data['hour_of_day'] = data['hour_of_day'].fillna(12)
+            data['day_of_week'] = data['day_of_week'].fillna(0)
+
             if not data.empty:
                 print(f"Datos cargados de Supabase: {len(data)} registros.")
                 return data
@@ -57,7 +63,7 @@ def load_data():
             print(f"Error conectando a Supabase: {e}. Usando Mock Data.")
     
     print("Usando Datos Mock (Local)...")
-    # FORZAR NUEVO DESPLIEGUE (FORCE DEPLOY)
+    # FORZAR NUEVO DESPLIEGUE (FORCE DEPLOY - Fix NaN)
     # Datos de entrenamiento Mock (Historial enriquecido)
     # 0 = Lunes, 6 = Domingo
     # Datos de entrenamiento Mock (Historial enriquecido)
