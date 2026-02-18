@@ -35,6 +35,10 @@ def load_data():
                 'items': 'order_item',
                 'Total_monto': 'ticket_value'
             })
+
+            # CORRECCIÓN DE ERROR: Asegurar que 'order_item' sea siempre string
+            # (Supabase puede devolver dicts si la columna es JSON)
+            data['order_item'] = data['order_item'].astype(str)
             
             # Asegurarse de tener hora y día (extraer de created_at si existe, sino simular)
             if 'created_at' in data.columns:
