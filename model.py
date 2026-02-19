@@ -9,20 +9,25 @@ except ImportError:
     create_client = None
 
 # --- Simulating Database Connection (Supabase) ---
+last_load_error = None # Global variable to store last error
+
 def load_data():
+    global last_load_error
+    last_load_error = None
+    
     # 1. Intentamos cargar de Supabase si están las credenciales
     # Prioridad: Variables de Entorno (Producción)
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_KEY")
 
     if not url or not key:
-        # Fallback: Credenciales Hardcoded (Desarrollo Local)
-        url = "https://tu-proyecto.supabase.co" 
-        key = "tu-anon-key-larga-aqui"
+        last_load_error = "Credenciales de Supabase no configuradas (ENV VARS faltantes)."
+        print(last_load_error)
+        return pd.DataFrame()
     
     if url and key and create_client:
         try:
-            print("Conectando a Supabase...")
+            print(f"Conectando a Supabase: {url}...")
             supabase = create_client(url, key)
             # Asumimos que la tabla se llama 'orders'
             # IMPORTANTE: Usamos comillas dobles para "Total_monto" porque es Case Sensitive en Postgres
@@ -110,28 +115,23 @@ def load_data():
             # Si conecta a Supabase pero no hay datos (Base de datos vacía), devolvemos DataFrame vacío.
             # NO usamos Mock Data para no "inventar" recomendaciones al usuario.
             if data.empty:
-                print("Conexión exitosa a Supabase, pero la tabla 'orders' está vacía.")
-            else:
-                print(f"Datos cargados de Supabase: {len(data)} registros.")
-            
-            return data
-
-            if data.empty:
-                print("Conexión exitosa a Supabase, pero la tabla 'orders' está vacía.")
+                last_load_error = "Conexión exitosa, pero tabla 'orders' vacía o sin registros válidos."
+                print(last_load_error)
             else:
                 print(f"Datos cargados de Supabase: {len(data)} registros.")
             
             return data
 
         except Exception as e:
-            print(f"Error conectando a Supabase: {e}")
+            last_load_error = f"Error conectando a Supabase: {str(e)}"
+            print(last_load_error)
             # --- CORRECCIÓN FINAL ---
             # Si falla la conexión, NO usamos Mock Data. 
             # Devolvemos un DataFrame vacío para que el sistema reporte "Error" o "Sin Datos".
             return pd.DataFrame()
     
     # Si no hay credenciales configured
-    print("No se encontraron credenciales de Supabase (Variables de Entorno).")
+    last_load_error = "Error desconocido (library missing?)"
     return pd.DataFrame()
 
 class RestaurantRecommender:
@@ -205,6 +205,7 @@ class RestaurantRecommender:
         return None
 
     def predict_recommendation(self, restaurant_id, customer_id, current_ticket_avg=0, hour=12, day=0):
+        global last_load_error
         # Normalizar ID de entrada
         customer_clean = ''.join(filter(str.isdigit, str(customer_id)))
         
@@ -230,8 +231,9 @@ class RestaurantRecommender:
             except Exception as e:
                 print(f"Error al intentar reentrenar: {e}")
 
-        if not self.is_trained: 
-            response.update({"reason": "Modelo sin datos (DB Vacía)", "model_type": "Error"})
+        if not self.is_trained:
+            error_msg = last_load_error if last_load_error else "Modelo sin datos (DB Vacía)"
+            response.update({"reason": f"No entrenado: {error_msg}", "model_type": "Error"})
             return response
         
         # Fallback si no existe el restaurante
