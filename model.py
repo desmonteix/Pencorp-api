@@ -40,41 +40,60 @@ def load_data():
             # 1. Asegurar que sea una lista (parsear si es string)
             def parse_items(x):
                 if isinstance(x, list): return x
+                if pd.isna(x): return []
                 try:
+                    s = str(x).replace("'", '"')
                     import json
-                    return json.loads(str(x).replace("'", '"')) 
+                    parsed = json.loads(s)
+                    # CASO: {"items": ["Pizza", ...]} -> Extraer lista interna
+                    if isinstance(parsed, dict) and 'items' in parsed:
+                        return parsed['items']
+                    # CASO: Lista directa -> Devolver
+                    if isinstance(parsed, list):
+                        return parsed
+                    return [str(parsed)]
                 except:
                     return [str(x)]
 
             data['order_list_raw'] = data['order_item'].apply(parse_items)
             
-            # 2. Limpieza de BUNDLES (Antes de explode, para detectar patrones de pedidos completos)
-            blacklist = ['Total:', 'Pago:', 'Vuelto:', 'Envio', 'Recargo', 'Son:', 'Dirección', 'Nombre:']
+            # 2. Limpieza de BUNDLES 
+            # Normalizamos ID de cliente: Quitamos espacios, +, y guiones para que coincida siempre
+            def normalize_phone(phone):
+                if pd.isna(phone): return "UNKNOWN"
+                return ''.join(filter(str.isdigit, str(phone)))
+
+            data['customer_id_clean'] = data['customer_id'].apply(normalize_phone)
+            
+            blacklist = ['Total:', 'Pago:', 'Vuelto:', 'Envio', 'Recargo', 'Son:', 'Dirección', 'Nombre:', 'Fecha:', 'Mesa:']
             pattern = '|'.join(blacklist)
 
             def clean_bundle(items_list):
+                if not isinstance(items_list, list): return []
                 # Filtra basura y devuelve lista limpia
-                return [str(i).strip() for i in items_list if not any(b.lower() in str(i).lower() for b in blacklist)]
+                cleaned = []
+                for i in items_list:
+                    s = str(i).strip()
+                    # Quitar asteriscos iniciales (ej: "*1x Pizza")
+                    if s.startswith('*'): s = s[1:].strip()
+                    # Quitar "1x ", "2x " del inicio si existe
+                    parts = s.split(' ', 1)
+                    if len(parts) > 1 and parts[0].endswith('x') and parts[0][:-1].isdigit():
+                        s = parts[1]
+                    
+                    if not any(b.lower() in s.lower() for b in blacklist):
+                        cleaned.append(s)
+                return cleaned
 
             data['order_bundle'] = data['order_list_raw'].apply(clean_bundle)
-            # Creamos una "Firma" del pedido (ej: "Coca Cola, Pizza") para contar repetidos
             data['bundle_signature'] = data['order_bundle'].apply(lambda x: ', '.join(sorted(x)))
             
-            # 3. Explode para el Modelo Neuronal (Items individuales)
-            # Guardamos copia del dataframe con bundles ANTES de explotar, para uso en get_recurrent_bundle
-            # Truco: Lo guardamos en el mismo objeto data temporalmente o lo retornamos.
-            # Mejor: Lo asignamos a una variable global o atributo de clase si fuera posible, pero aqui es script.
-            # SOLUCION: El dataframe retornado 'data' será el EXPLODED.
-            # PERO agregamos una columna 'is_bundle_signature' que se repite, para poder reconstruir lógica básica.
-            
+            # 3. Explode
             data = data.explode('order_bundle')
-            data = data.rename(columns={'order_bundle': 'order_item'}) # El modelo usa 'order_item'
-            
-            # Limpieza final de filas vacías tras explode
+            data = data.rename(columns={'order_bundle': 'order_item'}) 
             data = data[data['order_item'].str.len() > 0]
-            # -----------------------------------------------------
             
-            # Asegurarse de tener hora y día (extraer de created_at si existe, sino simular)
+            # Asegurarse de tener hora y día
             if 'created_at' in data.columns:
                 data['created_at'] = pd.to_datetime(data['created_at'])
                 data['hour_of_day'] = data['created_at'].dt.hour
@@ -83,7 +102,6 @@ def load_data():
                 data['hour_of_day'] = 12
                 data['day_of_week'] = 0
 
-            # CORRECCIÓN DE ERROR 2: Asegurar que no haya NaNs en features numéricos
             data['ticket_value'] = pd.to_numeric(data['ticket_value'], errors='coerce').fillna(0)
             data['hour_of_day'] = data['hour_of_day'].fillna(12)
             data['day_of_week'] = data['day_of_week'].fillna(0)
@@ -97,7 +115,7 @@ def load_data():
     print("Usando Datos Mock (Local)...")
     # Mock Data simplificado - Agregamos 'Patragonia' para pruebas
     data = {
-        'customer_id': ['C001', 'C001', '+51 983286800', '+51 983286800'],
+        'customer_id': ['C001', 'C001', '+51 983286800', '983286800'], # Probamos con y sin +51
         'restaurant_id': ['RestA', 'RestA', 'Patragonia', 'Patragonia'],
         'order_item': ['Pizza', 'Coca Cola', 'Promo 2 Pizzas', 'Inca Kola'],
         'bundle_signature': ['Coca Cola, Pizza', 'Coca Cola, Pizza', 'Inca Kola, Promo 2 Pizzas', 'Inca Kola, Promo 2 Pizzas'],
@@ -105,17 +123,20 @@ def load_data():
         'hour_of_day': [20, 20, 19, 19],
         'day_of_week': [5, 5, 4, 4]
     }
-    return pd.DataFrame(data)
+    df_mock = pd.DataFrame(data)
+    # Aplicar normalización también al mock
+    df_mock['customer_id_clean'] = df_mock['customer_id'].apply(lambda x: ''.join(filter(str.isdigit, str(x))))
+    return df_mock
 
 class RestaurantRecommender:
     def __init__(self):
         self.models = {}
         self.encoders = {}
-        self.history_df = None # Para patrones exactos
+        self.history_df = None 
+        self.top_sellers = {} # { 'RestA': ['Pizza', 'Coca'] }
         self.is_trained = False
 
     def train(self, df):
-        # Guardamos referencia al DF completo (que incluye bundle_signature) para buscar patrones
         self.history_df = df.copy()
         
         restaurantes = df['restaurant_id'].unique()
@@ -124,13 +145,20 @@ class RestaurantRecommender:
             print(f"Entrenando modelo para: {rest_id}...")
             df_rest = df[df['restaurant_id'] == rest_id].copy()
             
+            # Calcular Top Sellers (Globales para este restaurante)
+            # Excluyendo items vacíos
+            if 'order_item' in df_rest.columns:
+                 top = df_rest['order_item'].value_counts().head(3).index.tolist()
+                 self.top_sellers[rest_id] = top
+            else:
+                 self.top_sellers[rest_id] = ["Menú de la Casa"]
+
             le_item = LabelEncoder()
-            le_customer = LabelEncoder()
+            le_customer = LabelEncoder() # Usaremos customer_id_clean
             
             # Fit encoders
-            # Importante: Asegurarse de que las columnas sean string
             df_rest['item_code'] = le_item.fit_transform(df_rest['order_item'].astype(str))
-            df_rest['customer_code'] = le_customer.fit_transform(df_rest['customer_id'].astype(str))
+            df_rest['customer_code'] = le_customer.fit_transform(df_rest['customer_id_clean'].astype(str))
             
             X = df_rest[['customer_code', 'ticket_value', 'hour_of_day', 'day_of_week']]
             y = df_rest['item_code']
@@ -144,19 +172,20 @@ class RestaurantRecommender:
         self.is_trained = True
         print("Modelos entrenados.")
 
-    def get_recurrent_bundle(self, restaurant_id, customer_id):
-        # Busca si el cliente repite mucho un mismo bundle
+    def get_recurrent_bundle(self, restaurant_id, customer_clean):
         if self.history_df is None: return None
         
-        # Filtramos historial del cliente
-        # Aseguramos tipos consistentes
         client_df = self.history_df[
             (self.history_df['restaurant_id'] == restaurant_id) & 
-            (self.history_df['customer_id'].astype(str) == str(customer_id))
+            (self.history_df['customer_id_clean'] == customer_clean)
         ]
         
         if client_df.empty: return None
         
+        # Filtramos bundles vacíos o nulos
+        client_df = client_df[client_df['bundle_signature'].str.len() > 0]
+        if client_df.empty: return None
+
         top_signature = client_df['bundle_signature'].mode()
         if not top_signature.empty:
             signature = top_signature[0]
@@ -165,10 +194,12 @@ class RestaurantRecommender:
         return None
 
     def predict_recommendation(self, restaurant_id, customer_id, current_ticket_avg=0, hour=12, day=0):
-        # Estructura base de respuesta para evitar errores en n8n
+        # Normalizar ID de entrada
+        customer_clean = ''.join(filter(str.isdigit, str(customer_id)))
+        
         response = {
             "restaurant_id": restaurant_id,
-            "customer_id": customer_id,
+            "customer_id": customer_id, # Devolvemos el original para el usuario
             "recommendation": ["Plato del Día"],
             "reason": "Inicio",
             "model_type": "Unknown"
@@ -178,17 +209,19 @@ class RestaurantRecommender:
             response.update({"reason": "Modelo no entrenado", "model_type": "Error"})
             return response
         
+        # Fallback si no existe el restaurante
         if restaurant_id not in self.models:
-            response.update({"reason": f"Restaurante '{restaurant_id}' no encontrado en historial.", "model_type": "Fallback (New Restaurant)"})
+            response.update({"reason": "Nuevo Restaurante", "model_type": "Fallback"})
             return response
 
         model = self.models[restaurant_id]
         le_customer = self.encoders[restaurant_id]['customer']
         le_item = self.encoders[restaurant_id]['item']
+        top_sellers = self.top_sellers.get(restaurant_id, ["Plato Popular"])
 
         # ESTRATEGIA 1: PEDIDO RECURRENTE (Adaptive Bundle)
         try:
-            recurrent_bundle = self.get_recurrent_bundle(restaurant_id, customer_id)
+            recurrent_bundle = self.get_recurrent_bundle(restaurant_id, customer_clean)
             if recurrent_bundle:
                 response.update({
                     "recommendation": recurrent_bundle,
@@ -200,20 +233,20 @@ class RestaurantRecommender:
             print(f"Error en Bundle Logic: {e}")
 
         # ESTRATEGIA 2: MODELO (Top 3 Items)
-        if str(customer_id) not in le_customer.classes_:
+        # Verificar si el cliente existe (usando ID limpio)
+        if customer_clean not in le_customer.classes_:
+            # COLD START: Devolver Top Sellers del Restaurante
             response.update({
-                "recommendation": ["Sugerencia del Chef"], 
-                "reason": "Cliente Nuevo en este restaurante", 
-                "model_type": "Heuristic (Cold Start)"
+                "recommendation": top_sellers, 
+                "reason": f"Sugerencias más populares de {restaurant_id} (Cliente Nuevo)", 
+                "model_type": "Heuristic (Top Sellers)"
             })
             return response
 
         try:
-            customer_code = le_customer.transform([str(customer_id)])[0]
-            # Aseguramos input numerico
+            customer_code = le_customer.transform([customer_clean])[0]
             probs = model.predict_proba([[customer_code, float(current_ticket_avg), int(hour), int(day)]])[0]
             
-            # Top 3
             top_3_indices = probs.argsort()[-3:][::-1]
             top_3_items = le_item.inverse_transform(top_3_indices)
             
@@ -224,9 +257,10 @@ class RestaurantRecommender:
             })
             return response
         except Exception as e:
+            # Error Fallback -> Top Sellers
             response.update({
-                "recommendation": ["Plato Popular"], 
-                "reason": f"Error calculando predicción: {str(e)}", 
+                "recommendation": top_sellers, 
+                "reason": f"Error calculando predicción (Fallback): {str(e)}", 
                 "model_type": "Error Fallback"
             })
             return response
