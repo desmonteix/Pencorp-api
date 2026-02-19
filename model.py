@@ -90,6 +90,7 @@ def load_data():
                         cleaned.append(s)
                 return cleaned
 
+            data['order_bundle'] = data['order_list_raw'].apply(clean_bundle)
             data['bundle_signature'] = data['order_bundle'].apply(lambda x: ', '.join(sorted(x)))
             
             # 3. Explode
