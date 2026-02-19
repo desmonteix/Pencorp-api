@@ -116,25 +116,23 @@ def load_data():
             
             return data
 
+            if data.empty:
+                print("Conexión exitosa a Supabase, pero la tabla 'orders' está vacía.")
+            else:
+                print(f"Datos cargados de Supabase: {len(data)} registros.")
+            
+            return data
+
         except Exception as e:
-            print(f"Error conectando a Supabase: {e}. Usando Mock Data.")
+            print(f"Error conectando a Supabase: {e}")
+            # --- CORRECCIÓN FINAL ---
+            # Si falla la conexión, NO usamos Mock Data. 
+            # Devolvemos un DataFrame vacío para que el sistema reporte "Error" o "Sin Datos".
+            return pd.DataFrame()
     
-    # Solo usamos Mock Data si falló la conexión o no hay credenciales (Entorno Local sin config)
-    print("Usando Datos Mock (Local) por fallo de conexión...")
-    # Mock Data simplificado - Agregamos 'Patragonia' para pruebas
-    data = {
-        'customer_id': ['C001', 'C001', '+51 983286800', '983286800'],
-        'restaurant_id': ['RestA', 'RestA', 'Patragonia', 'Patragonia'],
-        'order_item': ['Pizza', 'Coca Cola', 'Promo 2 Pizzas', 'Inca Kola'],
-        'bundle_signature': ['Coca Cola, Pizza', 'Coca Cola, Pizza', 'Inca Kola, Promo 2 Pizzas', 'Inca Kola, Promo 2 Pizzas'],
-        'ticket_value': [50, 50, 45, 45],
-        'hour_of_day': [20, 20, 19, 19],
-        'day_of_week': [5, 5, 4, 4]
-    }
-    df_mock = pd.DataFrame(data)
-    # Aplicar normalización también al mock
-    df_mock['customer_id_clean'] = df_mock['customer_id'].apply(lambda x: ''.join(filter(str.isdigit, str(x))))
-    return df_mock
+    # Si no hay credenciales configured
+    print("No se encontraron credenciales de Supabase (Variables de Entorno).")
+    return pd.DataFrame()
 
 class RestaurantRecommender:
     def __init__(self):
