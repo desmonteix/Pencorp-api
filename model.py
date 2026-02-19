@@ -95,15 +95,15 @@ def load_data():
             print(f"Error conectando a Supabase: {e}. Usando Mock Data.")
     
     print("Usando Datos Mock (Local)...")
-    # Mock Data simplificado
+    # Mock Data simplificado - Agregamos 'Patragonia' para pruebas
     data = {
-        'customer_id': ['C001', 'C001'],
-        'restaurant_id': ['RestA', 'RestA'],
-        'order_item': ['Pizza', 'Coca Cola'],
-        'bundle_signature': ['Coca Cola, Pizza', 'Coca Cola, Pizza'], # Firma repetida
-        'ticket_value': [50, 50],
-        'hour_of_day': [20, 20],
-        'day_of_week': [5, 5]
+        'customer_id': ['C001', 'C001', '+51 983286800', '+51 983286800'],
+        'restaurant_id': ['RestA', 'RestA', 'Patragonia', 'Patragonia'],
+        'order_item': ['Pizza', 'Coca Cola', 'Promo 2 Pizzas', 'Inca Kola'],
+        'bundle_signature': ['Coca Cola, Pizza', 'Coca Cola, Pizza', 'Inca Kola, Promo 2 Pizzas', 'Inca Kola, Promo 2 Pizzas'],
+        'ticket_value': [50, 50, 45, 45],
+        'hour_of_day': [20, 20, 19, 19],
+        'day_of_week': [5, 5, 4, 4]
     }
     return pd.DataFrame(data)
 
@@ -128,6 +128,7 @@ class RestaurantRecommender:
             le_customer = LabelEncoder()
             
             # Fit encoders
+            # Importante: Asegurarse de que las columnas sean string
             df_rest['item_code'] = le_item.fit_transform(df_rest['order_item'].astype(str))
             df_rest['customer_code'] = le_customer.fit_transform(df_rest['customer_id'].astype(str))
             
@@ -148,70 +149,87 @@ class RestaurantRecommender:
         if self.history_df is None: return None
         
         # Filtramos historial del cliente
+        # Aseguramos tipos consistentes
         client_df = self.history_df[
             (self.history_df['restaurant_id'] == restaurant_id) & 
-            (self.history_df['customer_id'] == customer_id)
+            (self.history_df['customer_id'].astype(str) == str(customer_id))
         ]
         
         if client_df.empty: return None
         
-        # Contamos cuántas veces aparece cada 'bundle_signature'
-        # Como el DF está explotado, bundle_signature aparece N veces por orden.
-        # Lo correcto sería agrupar por (created_at, bundle_signature) para contar ÓRDENES únicas.
-        # Aproximación rápida: value_counts() de signature. 
-        # Si una signature aparece mucho, es candidata.
-        
         top_signature = client_df['bundle_signature'].mode()
         if not top_signature.empty:
             signature = top_signature[0]
-            # Devolvemos la lista de items splitteada
+            if pd.isna(signature): return None
             return signature.split(', ')
         return None
 
     def predict_recommendation(self, restaurant_id, customer_id, current_ticket_avg=0, hour=12, day=0):
-        if not self.is_trained: return "Modelo no entrenado."
+        # Estructura base de respuesta para evitar errores en n8n
+        response = {
+            "restaurant_id": restaurant_id,
+            "customer_id": customer_id,
+            "recommendation": ["Plato del Día"],
+            "reason": "Inicio",
+            "model_type": "Unknown"
+        }
+
+        if not self.is_trained: 
+            response.update({"reason": "Modelo no entrenado", "model_type": "Error"})
+            return response
         
         if restaurant_id not in self.models:
-            return {"recommendation": "Plato del Día", "reason": "Nuevo Restaurante", "model_type": "Fallback"}
+            response.update({"reason": f"Restaurante '{restaurant_id}' no encontrado en historial.", "model_type": "Fallback (New Restaurant)"})
+            return response
 
         model = self.models[restaurant_id]
         le_customer = self.encoders[restaurant_id]['customer']
         le_item = self.encoders[restaurant_id]['item']
 
         # ESTRATEGIA 1: PEDIDO RECURRENTE (Adaptive Bundle)
-        recurrent_bundle = self.get_recurrent_bundle(restaurant_id, customer_id)
-        # Si hay un bundle recurrente (podríamos poner umbral de confianza), lo usamos.
-        # Por ahora, si existe historial, asumimos el modo como preferencia fuerte.
-        if recurrent_bundle:
-             return {
-                "restaurant_id": restaurant_id,
-                "customer_id": customer_id,
-                "recommendation": recurrent_bundle, # Lista de items
-                "reason": f"Es tu pedido habitual en {restaurant_id}.",
-                "model_type": "Pattern Recognition (Recurrent Bundle)"
-            }
+        try:
+            recurrent_bundle = self.get_recurrent_bundle(restaurant_id, customer_id)
+            if recurrent_bundle:
+                response.update({
+                    "recommendation": recurrent_bundle,
+                    "reason": f"Es tu pedido habitual en {restaurant_id}.",
+                    "model_type": "Pattern Recognition (Recurrent Bundle)"
+                })
+                return response
+        except Exception as e:
+            print(f"Error en Bundle Logic: {e}")
 
         # ESTRATEGIA 2: MODELO (Top 3 Items)
-        if customer_id not in le_customer.classes_:
-            return {"recommendation": ["Sugerencia del Chef"], "reason": "Cliente Nuevo", "model_type": "Heuristic"}
+        if str(customer_id) not in le_customer.classes_:
+            response.update({
+                "recommendation": ["Sugerencia del Chef"], 
+                "reason": "Cliente Nuevo en este restaurante", 
+                "model_type": "Heuristic (Cold Start)"
+            })
+            return response
 
         try:
             customer_code = le_customer.transform([str(customer_id)])[0]
-            probs = model.predict_proba([[customer_code, current_ticket_avg, hour, day]])[0]
+            # Aseguramos input numerico
+            probs = model.predict_proba([[customer_code, float(current_ticket_avg), int(hour), int(day)]])[0]
             
             # Top 3
             top_3_indices = probs.argsort()[-3:][::-1]
             top_3_items = le_item.inverse_transform(top_3_indices)
             
-            return {
-                "restaurant_id": restaurant_id,
-                "customer_id": customer_id,
+            response.update({
                 "recommendation": list(top_3_items),
                 "reason": f"Basado en tus gustos variados en {restaurant_id}.",
                 "model_type": "Neural Network (Top-3 Probabilistic)"
-            }
+            })
+            return response
         except Exception as e:
-            return {"recommendation": ["Plato Popular"], "reason": f"Error calculando: {str(e)}", "model_type": "Error Fallback"}
+            response.update({
+                "recommendation": ["Plato Popular"], 
+                "reason": f"Error calculando predicción: {str(e)}", 
+                "model_type": "Error Fallback"
+            })
+            return response
 
 recommender = RestaurantRecommender()
 df = load_data()
