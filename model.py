@@ -106,16 +106,24 @@ def load_data():
             data['hour_of_day'] = data['hour_of_day'].fillna(12)
             data['day_of_week'] = data['day_of_week'].fillna(0)
 
-            if not data.empty:
+            # --- CORRECCIÓN IMPORTANTE ---
+            # Si conecta a Supabase pero no hay datos (Base de datos vacía), devolvemos DataFrame vacío.
+            # NO usamos Mock Data para no "inventar" recomendaciones al usuario.
+            if data.empty:
+                print("Conexión exitosa a Supabase, pero la tabla 'orders' está vacía.")
+            else:
                 print(f"Datos cargados de Supabase: {len(data)} registros.")
-                return data
+            
+            return data
+
         except Exception as e:
             print(f"Error conectando a Supabase: {e}. Usando Mock Data.")
     
-    print("Usando Datos Mock (Local)...")
+    # Solo usamos Mock Data si falló la conexión o no hay credenciales (Entorno Local sin config)
+    print("Usando Datos Mock (Local) por fallo de conexión...")
     # Mock Data simplificado - Agregamos 'Patragonia' para pruebas
     data = {
-        'customer_id': ['C001', 'C001', '+51 983286800', '983286800'], # Probamos con y sin +51
+        'customer_id': ['C001', 'C001', '+51 983286800', '983286800'],
         'restaurant_id': ['RestA', 'RestA', 'Patragonia', 'Patragonia'],
         'order_item': ['Pizza', 'Coca Cola', 'Promo 2 Pizzas', 'Inca Kola'],
         'bundle_signature': ['Coca Cola, Pizza', 'Coca Cola, Pizza', 'Inca Kola, Promo 2 Pizzas', 'Inca Kola, Promo 2 Pizzas'],
@@ -137,6 +145,11 @@ class RestaurantRecommender:
         self.is_trained = False
 
     def train(self, df):
+        if df.empty:
+            print("DataFrame vacío. No se puede entrenar el modelo.")
+            self.is_trained = False
+            return
+
         self.history_df = df.copy()
         
         restaurantes = df['restaurant_id'].unique()
