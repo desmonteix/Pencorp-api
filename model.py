@@ -90,12 +90,21 @@ def load_data():
                         cleaned.append(s)
                 return cleaned
 
-            data['order_bundle'] = data['order_list_raw'].apply(clean_bundle)
             data['bundle_signature'] = data['order_bundle'].apply(lambda x: ', '.join(sorted(x)))
             
             # 3. Explode
+            # Eliminamos la columna original para no duplicar nombres
+            if 'order_item' in data.columns:
+                data = data.drop(columns=['order_item'])
+            
+            # Explotamos la lista limpia
             data = data.explode('order_bundle')
+            
+            # Renombramos para que el modelo la use
             data = data.rename(columns={'order_bundle': 'order_item'}) 
+            
+            # Filtramos nulos o vacíos que hayan quedado
+            data = data.dropna(subset=['order_item'])
             data = data[data['order_item'].str.len() > 0]
             
             # Asegurarse de tener hora y día
