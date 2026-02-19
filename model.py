@@ -216,14 +216,34 @@ class RestaurantRecommender:
             "model_type": "Unknown"
         }
 
+        # --- AUTO-REENTRENAMIENTO (LAZY LOADING) ---
+        # Si el modelo no está entrenado (porque al iniciar la DB estaba vacía),
+        # intentamos cargar datos de nuevo ahora.
+        if not self.is_trained:
+            print("Modelo no entrenado. Intentando cargar datos de nuevo...")
+            try:
+                # Importante: load_data debe estar disponible en este scope o ser pasado
+                # Asumimos que load_data es global en este archivo
+                new_df = load_data()
+                if not new_df.empty:
+                    self.train(new_df)
+            except Exception as e:
+                print(f"Error al intentar reentrenar: {e}")
+
         if not self.is_trained: 
-            response.update({"reason": "Modelo no entrenado", "model_type": "Error"})
+            response.update({"reason": "Modelo sin datos (DB Vacía)", "model_type": "Error"})
             return response
         
         # Fallback si no existe el restaurante
         if restaurant_id not in self.models:
-            response.update({"reason": "Nuevo Restaurante", "model_type": "Fallback"})
-            return response
+            # Intentar reentrenar por si es un restaurante nuevo
+            new_df = load_data()
+            if not new_df.empty:
+                self.train(new_df)
+            
+            if restaurant_id not in self.models:
+                response.update({"reason": "Nuevo Restaurante", "model_type": "Fallback"})
+                return response
 
         model = self.models[restaurant_id]
         le_customer = self.encoders[restaurant_id]['customer']
@@ -256,8 +276,10 @@ class RestaurantRecommender:
 
         try:
             customer_code = le_customer.transform([customer_clean])[0]
+            # Aseguramos input numerico
             probs = model.predict_proba([[customer_code, float(current_ticket_avg), int(hour), int(day)]])[0]
             
+            # Top 3
             top_3_indices = probs.argsort()[-3:][::-1]
             top_3_items = le_item.inverse_transform(top_3_indices)
             
