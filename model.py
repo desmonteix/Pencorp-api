@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from sklearn.neural_network import MLPClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 
 try:
@@ -184,7 +184,7 @@ class RestaurantRecommender:
             X = df_rest[['customer_code', 'ticket_value', 'hour_of_day', 'day_of_week']]
             y = df_rest['item_code']
             
-            model = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=2000, random_state=42)
+            model = RandomForestClassifier(n_estimators=100, random_state=42)
             model.fit(X, y)
             
             self.models[rest_id] = model
